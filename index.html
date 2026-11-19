@@ -1,0 +1,137 @@
+
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event Check-in</title>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<style>
+body{font-family:Arial;text-align:center;padding:20px;background:#f5f5f5}
+.box{background:white;padding:20px;border-radius:12px;max-width:450px;margin:auto}
+button{padding:12px 18px;margin:8px;border:0;border-radius:8px;font-size:16px}
+#reader{width:100%;margin-top:15px}
+#result{margin-top:20px}
+</style>
+</head>
+<body>
+<div class="box">
+<h2>Event Check-in</h2>
+<p>امسحي QR Code الخاص بالحضور</p>
+<button id="startBtn" onclick="startScanner()">ابدئي مسح QR Code</button>
+<div id="reader"></div>
+<div id="result">في انتظار مسح الكود...</div>
+</div>
+
+<script>
+const API_URL="https://script.google.com/macros/s/AKfycbxrMyteXYLYhudvdo_UYVb2e5_TEKzD7K-V1VIpKrnqyHVk33ks_sJINM8lsnKqA5ppqQ/exec";
+
+let scanner=null;
+let lastId="";
+let busy=false;
+
+function api(params){
+ return new Promise((resolve,reject)=>{
+  const cb="apiCallback_"+Date.now();
+  const script=document.createElement("script");
+  const query=new URLSearchParams({...params,callback:cb});
+  const timer=setTimeout(()=>{cleanup();reject(new Error("انتهى وقت الاتصال"))},15000);
+  function cleanup(){
+   clearTimeout(timer);
+   delete window[cb];
+   script.remove();
+  }
+  window[cb]=data=>{cleanup();resolve(data)};
+  script.onerror=()=>{cleanup();reject(new Error("فشل الاتصال بالسيرفر"))};
+  script.src=API_URL+"?"+query.toString();
+  document.body.appendChild(script);
+ });
+}
+
+async function startScanner(){
+ try{
+  if(scanner){
+   await scanner.resume();
+  }else{
+   scanner=new Html5Qrcode("reader");
+   await scanner.start(
+    {facingMode:"environment"},
+    {fps:10,qrbox:{width:250,height:250}},
+    onScanSuccess
+   );
+  }
+  document.getElementById("startBtn").style.display="none";
+  document.getElementById("result").innerText="الكاميرا تعمل.. امسحي الكود";
+ }catch(e){
+  document.getElementById("result").innerText="خطأ الكاميرا: "+e;
+ }
+}
+
+async function onScanSuccess(id){
+ if(busy||id===lastId)return;
+ busy=true;
+ lastId=id;
+ scanner.pause(true);
+ document.getElementById("result").innerText="جاري البحث...";
+ try{
+  const data=await api({action:"check",id:id});
+  showAttendee(data);
+ }catch(e){showError(e)}
+}
+
+function showAttendee(data){
+ const result=document.getElementById("result");
+ if(!data.found){
+  result.innerHTML="<h3>الكود غير موجود</h3>";
+  addContinueButton();
+  return;
+ }
+ result.innerHTML=`
+ <h3>${escapeHtml(data.name)}</h3>
+ <p>ID: ${escapeHtml(data.id)}</p>
+ <p>الحضور: ${escapeHtml(data.attendance||"لم يسجل")}</p>
+ <p>الوجبة: ${escapeHtml(data.meal||"لم تستلم")}</p>
+ <button onclick="mark(4)">تسجيل الحضور</button>
+ <button onclick="mark(5)">تسجيل استلام الوجبة</button>
+ <div id="status"></div>
+ <button onclick="continueScan()">مسح كود تاني</button>`;
+}
+
+async function mark(column){
+ document.getElementById("status").innerText="جاري التسجيل...";
+ try{
+  const response=await api({action:"mark",id:lastId,column:column});
+  document.getElementById("status").innerText=response.message;
+  if(response.success){
+   const data=await api({action:"check",id:lastId});
+   showAttendee(data);
+  }
+ }catch(e){
+  document.getElementById("status").innerText=e.message;
+ }
+}
+
+function showError(e){
+ document.getElementById("result").innerText="حصل خطأ: "+e.message;
+ addContinueButton();
+}
+
+function addContinueButton(){
+ document.getElementById("result").innerHTML+='<br><button onclick="continueScan()">مسح كود تاني</button>';
+}
+
+function continueScan(){
+ lastId="";
+ busy=false;
+ document.getElementById("result").innerText="في انتظار مسح الكود...";
+ if(scanner)scanner.resume();
+}
+
+function escapeHtml(value){
+ return String(value).replace(/[&<>"']/g,c=>({
+ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+ })[c]);
+}
+</script>
+</body>
+</html>
